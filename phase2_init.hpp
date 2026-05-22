@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 #include "models.hpp"
 #include "utils.hpp"
 #include "phase1_promising.hpp"
@@ -94,14 +95,14 @@ bool check_feasibility(const Bundle& bundle, const Order& new_order, const Rider
     return simulate_route_time(proposed_route, rider, dummy_penalty);
 }
 
-// 4. 초기 해 생성
+// 4. [NEW] 초기 해 생성 (데드라인 정렬 + Best Insertion)
 Solution generate_initial_solution() {
     Solution sol;
-    vector<bool> is_assigned(K, false); 
+    vector<bool> is_assigned(K, false);
     int assigned_count = 0;
 
-    int walk_left = rider_list[0].availability; 
-    int bike_left = rider_list[1].availability; 
+    int walk_left = rider_list[0].availability;
+    int bike_left = rider_list[1].availability;
 
     while (assigned_count < K) {
         Bundle current_bundle;
@@ -112,51 +113,107 @@ Solution generate_initial_solution() {
 
         current_bundle.rider_type = current_rider.type;
 
+        // 1. 시드 찾기: 마감 시간이 가장 급한 주문부터 배차 시작!
         int curr_order_id = -1;
+        int min_deadline = 1e9;
         for (int i = 0; i < K; i++) {
-            if (!is_assigned[i]) { curr_order_id = i; break; }
+            if (!is_assigned[i] && order_list[i].deadline < min_deadline) {
+                min_deadline = order_list[i].deadline;
+                curr_order_id = i;
+            }
         }
 
-        current_bundle.route.push_back(curr_order_id);       
-        current_bundle.route.push_back(curr_order_id + K);   
+        current_bundle.route = {curr_order_id, curr_order_id + K};
         current_bundle.total_volume = order_list[curr_order_id].volume;
         is_assigned[curr_order_id] = true;
         assigned_count++;
 
+        int last_added = curr_order_id; // 현재 라이더의 마지막 위치
+
+        // 2. 현재 위치(last_added)에서 가장 유망한(가까운) 친구들을 줄 세워서 끼워넣기
         while (true) {
-            int best_friend = -1;
-            double best_score = 1e9; 
+            struct FriendScore { int id; double score; };
+            vector<FriendScore> friends;
             for (int j = 0; j < K; j++) {
                 if (!is_assigned[j]) {
-                    if (promising_matrix[curr_order_id][j] < best_score) {
-                        best_score = promising_matrix[curr_order_id][j];
-                        best_friend = j;
+                    friends.push_back({j, promising_matrix[last_added][j]});
+                }
+            }
+            
+            // 점수가 낮은(궁합이 좋은/가까운) 순서대로 정렬
+            sort(friends.begin(), friends.end(), [](const FriendScore& a, const FriendScore& b) {
+                return a.score < b.score;
+            });
+
+            bool friend_added = false;
+
+            // 가까운 동네 친구부터 차례대로 찔러보기
+            for (const auto& f : friends) {
+                int candidate = f.id;
+                
+                // 용량 검사 (초과하면 아예 찔러보지도 않음)
+                if (current_bundle.total_volume + order_list[candidate].volume > current_rider.capacity) continue;
+
+                vector<int> pickups, deliveries;
+                for (int n : current_bundle.route) {
+                    if (n < K) pickups.push_back(n);
+                    else deliveries.push_back(n);
+                }
+
+                vector<int> best_route;
+                double min_cost_increase = 1e9;
+                bool found_insertion = false;
+
+                // Best Insertion: 픽업/배달 조합 다 찔러보기
+                for (int p = 0; p <= pickups.size(); p++) {
+                    for (int d = 0; d <= deliveries.size(); d++) {
+                        vector<int> temp_route;
+                        for (int i = 0; i < p; ++i) temp_route.push_back(pickups[i]);
+                        temp_route.push_back(candidate);
+                        for (int i = p; i < pickups.size(); ++i) temp_route.push_back(pickups[i]);
+
+                        for (int i = 0; i < d; ++i) temp_route.push_back(deliveries[i]);
+                        temp_route.push_back(candidate + K);
+                        for (int i = d; i < deliveries.size(); ++i) temp_route.push_back(deliveries[i]);
+
+                        double dummy_penalty = 0.0;
+                        // 90분 제한 무사 통과 시 비용 계산
+                        if (simulate_route_time(temp_route, current_rider, dummy_penalty)) {
+                            double new_cost = calculate_final_cost(temp_route, current_rider);
+                            if (new_cost < min_cost_increase) {
+                                min_cost_increase = new_cost;
+                                best_route = temp_route;
+                                found_insertion = true;
+                            }
+                        }
                     }
+                }
+
+                // 성공적으로 끼워 넣었다면!
+                if (found_insertion) {
+                    current_bundle.route = best_route;
+                    current_bundle.total_volume += order_list[candidate].volume;
+                    is_assigned[candidate] = true;
+                    assigned_count++;
+                    last_added = candidate; // 기준점 갱신 (꼬리물기)
+                    friend_added = true;
+                    break; // 한 명 탔으니 루프 빠져나가서 새 기준점으로 다시 가장 가까운 친구 찾기
                 }
             }
 
-            if (best_friend == -1) break;
-
-            if (check_feasibility(current_bundle, order_list[best_friend], current_rider)) {
-                vector<int> new_route;
-                for (int node : current_bundle.route) if (node < K) new_route.push_back(node);
-                new_route.push_back(best_friend);
-                for (int node : current_bundle.route) if (node >= K) new_route.push_back(node);
-                new_route.push_back(best_friend + K);
-                
-                current_bundle.route = new_route;
-                current_bundle.total_volume += order_list[best_friend].volume;
-                is_assigned[best_friend] = true;
-                assigned_count++;
-            } else {
+            if (!friend_added) {
+                // 아무리 찔러봐도 동네 친구 중에 탈 수 있는 애가 없다면, 이 라이더는 출발!
                 break; 
             }
         }
 
-        // 💡 [수정] 복잡한 비용 계산식을 지우고 통합 회계사 호출!
+        // 출발하는 라이더 최종 운임 정산
         current_bundle.cost = calculate_final_cost(current_bundle.route, current_rider);
         sol.bundles.push_back(current_bundle);
     }
+
+    sol.total_cost = 0;
+    for (const auto& b : sol.bundles) sol.total_cost += b.cost;
     return sol;
 }
 

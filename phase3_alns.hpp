@@ -113,7 +113,7 @@ vector<Order> destroy_random(Solution& current_sol, int num_to_remove) {
     }
     
     // 랜덤하게 섞기
-    static std::mt19937 g(rand()); 
+    std::mt19937 g(rand()); 
     std::shuffle(all_assigned.begin(), all_assigned.end(), g);
 
     // 앞에서부터 지정된 개수만큼 뽑아서 파괴
@@ -146,133 +146,166 @@ vector<Order> destroy_random(Solution& current_sol, int num_to_remove) {
     current_sol.bundles = new_bundles;
     return removed_orders;
 }
-
 // =================================================================
-// 🛠️ 수리 도구 모음 (Repair Operators)
+// 🛠️ 수리 도구 모음 (Repair Operators) - Best Insertion 적용 
 // =================================================================
 
-// [수리 0] 후회값 삽입 (Regret Insertion)
+// [수리 0] 후회값 삽입 (Regret Insertion - 실제 비용 증가분 기반)
 void repair_regret(Solution& current_sol, vector<Order>& removed_orders) {
     while (!removed_orders.empty()) {
-        int best_o_idx = -1, target_b_idx = -1;
-        double max_regret = -1.0; 
-        
+        int best_o_idx = -1;
+        int target_b_idx = -1;
+        vector<int> final_best_route;
+        double max_regret = -1.0;
+
         for (int i = 0; i < removed_orders.size(); i++) {
             Order& tgt = removed_orders[i];
-            double best_score = 1e9, second_best_score = 1e9;
+            double best_cost_inc = 1e9;
+            double second_best_cost_inc = 1e9;
             int current_best_b_idx = -1;
-            
+            vector<int> current_best_route;
+
             for (int b = 0; b < current_sol.bundles.size(); b++) {
-                for (int node : current_sol.bundles[b].route) {
-                    if (node < K) { 
-                        double score = promising_matrix[tgt.id][node];
-                        if (score < best_score) {
-                            second_best_score = best_score; 
-                            best_score = score;             
-                            current_best_b_idx = b;
-                        } else if (score < second_best_score) {
-                            second_best_score = score;      
+                Bundle& c_bundle = current_sol.bundles[b];
+                Rider_Info r_info;
+                for(auto& r : rider_list) if(r.type == c_bundle.rider_type) { r_info = r; break; }
+
+                if (c_bundle.total_volume + tgt.volume > r_info.capacity) continue;
+
+                vector<int> pickups, deliveries;
+                for (int n : c_bundle.route) {
+                    if (n < K) pickups.push_back(n);
+                    else deliveries.push_back(n);
+                }
+
+                double bundle_best_inc = 1e9;
+                vector<int> bundle_best_route;
+
+                for (int p = 0; p <= pickups.size(); p++) {
+                    for (int d = 0; d <= deliveries.size(); d++) {
+                        vector<int> temp_route;
+                        for (int idx = 0; idx < p; ++idx) temp_route.push_back(pickups[idx]);
+                        temp_route.push_back(tgt.id);
+                        for (int idx = p; idx < pickups.size(); ++idx) temp_route.push_back(pickups[idx]);
+
+                        for (int idx = 0; idx < d; ++idx) temp_route.push_back(deliveries[idx]);
+                        temp_route.push_back(tgt.id + K);
+                        for (int idx = d; idx < deliveries.size(); ++idx) temp_route.push_back(deliveries[idx]);
+
+                        double dummy = 0.0;
+                        if (simulate_route_time(temp_route, r_info, dummy)) {
+                            double cost_inc = calculate_final_cost(temp_route, r_info) - c_bundle.cost;
+                            if (cost_inc < bundle_best_inc) {
+                                bundle_best_inc = cost_inc;
+                                bundle_best_route = temp_route;
+                            }
                         }
                     }
                 }
+
+                if (bundle_best_inc < best_cost_inc) {
+                    second_best_cost_inc = best_cost_inc;
+                    best_cost_inc = bundle_best_inc;
+                    current_best_b_idx = b;
+                    current_best_route = bundle_best_route;
+                } else if (bundle_best_inc < second_best_cost_inc) {
+                    second_best_cost_inc = bundle_best_inc;
+                }
             }
-            
-            double regret = second_best_score - best_score;
+
+            double regret = (second_best_cost_inc == 1e9 && best_cost_inc == 1e9) ? 0 : (second_best_cost_inc - best_cost_inc);
             if (regret > max_regret) {
                 max_regret = regret;
                 best_o_idx = i;
                 target_b_idx = current_best_b_idx;
+                final_best_route = current_best_route;
             }
         }
-        
+
         Order sel_order = removed_orders[best_o_idx];
-        bool inserted = false;
-        
         if (target_b_idx != -1) {
             Bundle& c_bundle = current_sol.bundles[target_b_idx];
+            c_bundle.route = final_best_route;
+            c_bundle.total_volume += sel_order.volume;
             Rider_Info r_info;
-            for(auto& r : rider_list) if(r.type == c_bundle.rider_type) r_info = r;
-            
-            if (check_feasibility(c_bundle, sel_order, r_info)) {
-                vector<int> new_route;
-                for (int n : c_bundle.route) if (n < K) new_route.push_back(n);
-                new_route.push_back(sel_order.id);
-                for (int n : c_bundle.route) if (n >= K) new_route.push_back(n);
-                new_route.push_back(sel_order.id + K);
-                
-                c_bundle.route = new_route;
-                recalculate_bundle_volume(c_bundle);
-
-                c_bundle.cost = calculate_final_cost(c_bundle.route, r_info);
-                inserted = true;
-            }
-        }
-        
-        if (!inserted) {
+            for(auto& r : rider_list) if(r.type == c_bundle.rider_type) { r_info = r; break; }
+            c_bundle.cost = calculate_final_cost(c_bundle.route, r_info);
+        } else {
             Bundle new_car;
             new_car.rider_type = "CAR";
             new_car.route = {sel_order.id, sel_order.id + K}; 
             new_car.total_volume = sel_order.volume;
             Rider_Info r_info;
-            for(auto& r : rider_list) if(r.type == "CAR") r_info = r;
-            new_car.cost = r_info.fixed_cost + (dist_matrix[sel_order.id][sel_order.id + K] / 100.0) * r_info.var_cost;
+            for(auto& r : rider_list) if(r.type == "CAR") { r_info = r; break; }
+            new_car.cost = calculate_final_cost(new_car.route, r_info);
             current_sol.bundles.push_back(new_car);
         }
         removed_orders.erase(removed_orders.begin() + best_o_idx);
     }
 }
 
-// [수리 1] 그리디 삽입 (눈앞의 이익만 쫓아서 아주 빠르게 채워 넣기)
+// [수리 1] 그리디 삽입 (Greedy Insertion - 최소 운임 증가분 탐색)
 void repair_greedy(Solution& current_sol, vector<Order>& removed_orders) {
     while (!removed_orders.empty()) {
-        Order sel_order = removed_orders.back(); // 그냥 맨 뒤에 있는 애 하나 뽑기
+        Order sel_order = removed_orders.back(); 
         removed_orders.pop_back();
 
-        int target_b_idx = -1;
-        double best_score = 1e9;
+        int best_b_idx = -1;
+        vector<int> best_route;
+        double min_cost_inc = 1e9;
         
-        // 이 주문을 넣었을 때 가장 단짝(점수가 낮은)이 있는 번들 찾기
         for (int b = 0; b < current_sol.bundles.size(); b++) {
-            for (int node : current_sol.bundles[b].route) {
-                if (node < K) { 
-                    double score = promising_matrix[sel_order.id][node];
-                    if (score < best_score) {
-                        best_score = score;             
-                        target_b_idx = b;
+            Bundle& c_bundle = current_sol.bundles[b];
+            Rider_Info r_info;
+            for(auto& r : rider_list) if(r.type == c_bundle.rider_type) { r_info = r; break; }
+
+            if (c_bundle.total_volume + sel_order.volume > r_info.capacity) continue;
+
+            vector<int> pickups, deliveries;
+            for (int n : c_bundle.route) {
+                if (n < K) pickups.push_back(n);
+                else deliveries.push_back(n);
+            }
+
+            for (int p = 0; p <= pickups.size(); p++) {
+                for (int d = 0; d <= deliveries.size(); d++) {
+                    vector<int> temp_route;
+                    for (int i = 0; i < p; ++i) temp_route.push_back(pickups[i]);
+                    temp_route.push_back(sel_order.id);
+                    for (int i = p; i < pickups.size(); ++i) temp_route.push_back(pickups[i]);
+
+                    for (int i = 0; i < d; ++i) temp_route.push_back(deliveries[i]);
+                    temp_route.push_back(sel_order.id + K);
+                    for (int i = d; i < deliveries.size(); ++i) temp_route.push_back(deliveries[i]);
+
+                    double dummy = 0.0;
+                    if (simulate_route_time(temp_route, r_info, dummy)) {
+                        double cost_inc = calculate_final_cost(temp_route, r_info) - c_bundle.cost;
+                        if (cost_inc < min_cost_inc) {
+                            min_cost_inc = cost_inc;
+                            best_route = temp_route;
+                            best_b_idx = b;
+                        }
                     }
                 }
             }
         }
         
-        bool inserted = false;
-        if (target_b_idx != -1) {
-            Bundle& c_bundle = current_sol.bundles[target_b_idx];
+        if (best_b_idx != -1) {
+            Bundle& c_bundle = current_sol.bundles[best_b_idx];
+            c_bundle.route = best_route;
+            c_bundle.total_volume += sel_order.volume;
             Rider_Info r_info;
-            for(auto& r : rider_list) if(r.type == c_bundle.rider_type) r_info = r;
-            
-            if (check_feasibility(c_bundle, sel_order, r_info)) {
-                vector<int> new_route;
-                for (int n : c_bundle.route) if (n < K) new_route.push_back(n);
-                new_route.push_back(sel_order.id);
-                for (int n : c_bundle.route) if (n >= K) new_route.push_back(n);
-                new_route.push_back(sel_order.id + K);
-                
-                c_bundle.route = new_route;
-                recalculate_bundle_volume(c_bundle);
-
-                c_bundle.cost = calculate_final_cost(c_bundle.route, r_info);
-                inserted = true;
-            }
-        }
-        
-        if (!inserted) {
+            for(auto& r : rider_list) if(r.type == c_bundle.rider_type) { r_info = r; break; }
+            c_bundle.cost = calculate_final_cost(c_bundle.route, r_info);
+        } else {
             Bundle new_car;
             new_car.rider_type = "CAR";
             new_car.route = {sel_order.id, sel_order.id + K}; 
             new_car.total_volume = sel_order.volume;
             Rider_Info r_info;
-            for(auto& r : rider_list) if(r.type == "CAR") r_info = r;
-            new_car.cost = r_info.fixed_cost + (dist_matrix[sel_order.id][sel_order.id + K] / 100.0) * r_info.var_cost;
+            for(auto& r : rider_list) if(r.type == "CAR") { r_info = r; break; }
+            new_car.cost = calculate_final_cost(new_car.route, r_info);
             current_sol.bundles.push_back(new_car);
         }
     }
@@ -281,20 +314,17 @@ void repair_greedy(Solution& current_sol, vector<Order>& removed_orders) {
 // =================================================================
 // 🏁 메인 ALNS 루프 (지휘 통제실 + 담금질 기법 SA 장착!)
 // =================================================================
-double current_temperature = 5000.0; // 초기 온도 (초반 대범함 수치)
-double cooling_rate = 0.9999;        // 냉각율 (루프마다 0.9999배씩 식음)
+double current_temperature = 5000.0; 
+double cooling_rate = 0.9999;        
 
-// 함수 서명이 바뀌었습니다! (현재 위치와 역대 최고 기록을 동시에 받음)
 Solution run_alns_step(Solution current_sol, double best_cost) {
     int num_to_remove = max(1, (int)(K * 0.01)); 
     
-    // 1. 인공지능 매니저가 오늘의 무기를 선택!
     int d_idx = select_operator(weight_destroy);
     int r_idx = select_operator(weight_repair);
     
     Solution new_sol = current_sol;
     
-    // 2. 파괴 및 수리 작전 실행!
     vector<Order> removed;
     if (d_idx == 0) removed = destroy_neighborhood(new_sol, num_to_remove);
     else            removed = destroy_random(new_sol, num_to_remove);
@@ -306,25 +336,20 @@ Solution run_alns_step(Solution current_sol, double best_cost) {
     for(auto& b : new_sol.bundles) new_total += b.cost;
     new_sol.total_cost = new_total;
     
-    // 3. 🧠 SA (Simulated Annealing) 수용 여부 결정
     double diff = new_sol.total_cost - current_sol.total_cost;
     double score = 0.0;
 
     if (diff < 0) {
-        if (new_sol.total_cost < best_cost) score = 5.0; // 신기록
-        else score = 3.0; // 개선됨
+        if (new_sol.total_cost < best_cost) score = 5.0; 
+        else score = 3.0; 
     } else {
-        score = 1.0; // 나빠졌지만 시도는 좋았음
+        score = 1.0; 
     }
     
-    // 가중치 학습 (Adaptive)
     weight_destroy[d_idx] = (1 - decay_rate) * weight_destroy[d_idx] + decay_rate * score;
     weight_repair[r_idx]  = (1 - decay_rate) * weight_repair[r_idx]  + decay_rate * score;
     
-    // 무조건 밖으로 새 솔루션을 던집니다!! (수락 여부는 main.cpp가 결정)
     return new_sol;
-          
 } 
-  
 
 #endif
