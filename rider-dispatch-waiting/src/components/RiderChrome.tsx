@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { BottomSheet } from './BottomSheet'
 import { TopControls } from './TopControls'
+import type { NearbyOrder } from '../screens/LiveDispatchScreen'
 
 function GpsIcon() {
   return (
@@ -13,20 +14,52 @@ function GpsIcon() {
 
 type RiderChromeProps = {
   children?: ReactNode
+  screenState?: 'heatmap' | 'optimizing' | 'list' | 'assigned'
+  assignedOrder?: NearbyOrder | null
+  nearbyOrders?: NearbyOrder[]
+  selectedPathId?: number | null
+  onGpsPress?: () => void
+  onSearchOrders?: () => void
+  onStartDelivery?: () => void
+  onSelectOrder?: (order: NearbyOrder) => void
+  onViewPath?: (id: number) => void
 }
 
-export function RiderChrome({ children }: RiderChromeProps) {
+export function RiderChrome({
+  children,
+  screenState = 'heatmap',
+  assignedOrder,
+  nearbyOrders,
+  selectedPathId,
+  onGpsPress,
+  onSearchOrders,
+  onStartDelivery,
+  onSelectOrder,
+  onViewPath,
+}: RiderChromeProps) {
   return (
     <>
       <TopControls />
-      <button
-        className="absolute bottom-44 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-white/95 shadow-lg shadow-slate-900/20"
-        aria-label="현재 위치로 이동"
-      >
-        <GpsIcon />
-      </button>
+      {screenState === 'heatmap' && (
+        <button
+          className="absolute bottom-56 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-white/95 shadow-lg shadow-slate-900/20"
+          aria-label="현재 위치로 이동"
+          onClick={onGpsPress}
+        >
+          <GpsIcon />
+        </button>
+      )}
       {children}
-      <BottomSheet />
+      <BottomSheet
+        screenState={screenState}
+        assignedOrder={assignedOrder}
+        nearbyOrders={nearbyOrders}
+        selectedPathId={selectedPathId}
+        onStartDelivery={onStartDelivery}
+        onSelectOrder={onSelectOrder}
+        onSearchOrders={onSearchOrders}
+        onViewPath={onViewPath}
+      />
     </>
   )
 }
