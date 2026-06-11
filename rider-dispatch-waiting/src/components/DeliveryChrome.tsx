@@ -1,51 +1,43 @@
 import type { ReactNode } from "react"
 import { TopControls } from "./TopControls"
 
-function GpsIcon() {
+function NavigationIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5 text-teal-700" fill="none">
-      <circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.8" />
+    <svg viewBox="0 0 24 24" className="h-4 w-4 text-white" fill="none">
       <path
-        d="M12 2V5M12 19V22M2 12H5M19 12H22"
+        d="M12 2L19 21L12 17L5 21L12 2Z"
+        fill="currentColor"
         stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
       />
     </svg>
-  );
+  )
 }
 
 type DeliveryChromeProps = {
-  children?: ReactNode;
-};
+  children?: ReactNode
+  onStartNavigation?: () => void
+  reward?: number
+}
 
-export function DeliveryChrome({ children }: DeliveryChromeProps) {
+export function DeliveryChrome({ children, onStartNavigation, reward }: DeliveryChromeProps) {
   return (
     <>
       <TopControls />
-
-      <button
-        className="absolute bottom-44 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-white/95 shadow-lg shadow-slate-900/20"
-        aria-label="현재 위치"
-      >
-        <GpsIcon />
-      </button>
-
       {children}
-
       <div className="absolute bottom-0 z-40 w-full rounded-t-3xl bg-white p-5 shadow-2xl shadow-slate-900/20">
-        <div className="mb-3 text-lg font-bold">총 배달료 9,940원</div>
-
-        <div className="flex gap-3">
-          <button className="flex-1 rounded-xl bg-slate-100 py-3 text-sm font-semibold">
-            모두 거절
-          </button>
-
-          <button className="flex-1 rounded-xl bg-emerald-500 py-3 text-sm font-semibold text-white">
-            2건 모두 수락
-          </button>
+        <div className="mb-3 text-lg font-bold">
+          총 배달료 {reward ? reward.toLocaleString() : '0'}원
         </div>
+        <button
+          onClick={onStartNavigation}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3 text-sm font-semibold text-white shadow-md shadow-emerald-500/30"
+        >
+          <NavigationIcon />
+          안내 시작하기
+        </button>
       </div>
     </>
-  );
+  )
 }
