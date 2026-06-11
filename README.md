@@ -21,18 +21,17 @@ npm run dev
 
 4. 터미널에 출력되는 로컬 주소(예: http://localhost:5173)를 브라우저에서 엽니다.
 
-
 ## 데이터 파일 교체
  
 사용할 데이터 파일(`*.json`)을 교체할 경우 아래 두 파일에서 파일명을 수정합니다.
  
-**`src/screens/LiveDispatchScreen.tsx`** — 2곳
+**`src/screens/LiveDispatchScreen.tsx`** — 69번, 113번 줄 (2곳)
  
 ```ts
 const res = await fetch('/STAGE3_TEST_9.json')  // 변경
 ```
  
-**`src/services/orderHeatmap.ts`** — 1곳
+**`src/services/orderHeatmap.ts`** — 27번 줄 (1곳)
  
 ```ts
 const res = await fetch("/STAGE3_TEST_9.json", {  // 변경
