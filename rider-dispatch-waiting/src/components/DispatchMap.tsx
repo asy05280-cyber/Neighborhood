@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { OrderHeatPoint } from '../services/orderHeatmap'
 
-const DEFAULT_CENTER = { lat: 37.5665, lng: 126.978 }
+declare global {
+  interface Window {
+    kakao: any
+  }
+}
+
+const DEFAULT_CENTER = { lat: 37.5, lng: 127.0 }
 const HEX_RADIUS = 12
 const HEAT_SPREAD = 100
 const FALLBACK_LAT_SCALE = 110000
@@ -16,9 +22,31 @@ type DispatchMapProps = {
   mode?: 'heatmap' | 'delivery'
   points?: OrderHeatPoint[]
   markers?: Marker[]
+  pickupMarkers?: Marker[]
+  deliveryMarkers?: Marker[]
   path?: { lat: number; lng: number }[]
+  paths?: { points: { lat: number; lng: number }[]; color: string; pickupPoints?: { lat: number; lng: number }[]; deliveryPoints?: { lat: number; lng: number }[] }[]
+  pathColor?: string
   badgeText?: string
+  centerTo?: { lat: number; lng: number } | null
+  fixedPosition?: { lat: number; lng: number } | null
   onCursorMove?: (lat: number, lng: number) => void
+}
+
+function getCenter(points: { lat: number; lng: number }[]) {
+  if (!points || points.length === 0) return DEFAULT_CENTER
+
+  let minLat = Infinity, maxLat = -Infinity
+  let minLng = Infinity, maxLng = -Infinity
+
+  points.forEach(p => {
+    minLat = Math.min(minLat, p.lat)
+    maxLat = Math.max(maxLat, p.lat)
+    minLng = Math.min(minLng, p.lng)
+    maxLng = Math.max(maxLng, p.lng)
+  })
+
+  return { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 }
 }
 
 function drawHex(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) {
@@ -55,18 +83,14 @@ function hexColor(normalized: number) {
 async function ensureKakaoLoaded() {
   if (window.kakao?.maps) return true
 
-  const appKey = import.meta.env.VITE_KAKAO_MAP_APP_KEY
-  console.log('KAKAO KEY:', appKey)
-
-  if (!appKey || appKey.includes('${')) return false
+  const script = document.createElement('script')
+  script.src = '//dapi.kakao.com/v2/maps/sdk.js?appkey=bcf7eb5c746613f012fdf704d51e6b38&autoload=false'
+  script.async = true
+  document.head.appendChild(script)
 
   await new Promise<void>((resolve, reject) => {
-    const script = document.createElement('script')
-    script.async = true
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false`
     script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Failed to load Kakao Map SDK'))
-    document.head.appendChild(script)
+    script.onerror = () => reject(new Error('Kakao SDK load 실패'))
   })
 
   return true
@@ -76,8 +100,14 @@ export function DispatchMap({
   mode = 'heatmap',
   points = [],
   markers,
+  pickupMarkers,
+  deliveryMarkers,
   path,
+  paths,
+  pathColor = '#10B981',
   badgeText,
+  centerTo,
+  fixedPosition,
   onCursorMove,
 }: DispatchMapProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -88,17 +118,26 @@ export function DispatchMap({
   const polylineRef = useRef<any>(null)
   const [isFallbackMap, setIsFallbackMap] = useState(false)
   const [ready, setReady] = useState(false)
-  const [isDragging, setIsDragging] = useState(false)
 
   const renderHeatmap = useCallback(() => {
-    if (mode !== 'heatmap') return
+    if (mode !== 'heatmap') {
+      // delivery 모드에서는 캔버스 즉시 클리어
+      const canvas = canvasRef.current
+      if (canvas) {
+        const ctx = canvas.getContext('2d')
+        ctx?.clearRect(0, 0, canvas.width, canvas.height)
+      }
+      return
+    }
 
     const canvas = canvasRef.current
     const root = rootRef.current
-    if (!canvas || !root || points.length === 0) return
+    if (!canvas || !root) return
 
     const width = root.clientWidth
     const height = root.clientHeight
+    if (width === 0 || height === 0) return
+
     const dpr = window.devicePixelRatio || 1
     canvas.width = Math.floor(width * dpr)
     canvas.height = Math.floor(height * dpr)
@@ -154,10 +193,17 @@ export function DispatchMap({
     }
   }, [mode, isFallbackMap, points])
 
+  // 항상 최신 renderHeatmap을 ref로 유지 → 이벤트 리스너의 stale closure 방지
+  const renderHeatmapRef = useRef(renderHeatmap)
+  useEffect(() => {
+    renderHeatmapRef.current = renderHeatmap
+  }, [renderHeatmap])
+
+  // Kakao 지도 초기화 (최초 1회) — ref를 통해 항상 최신 renderHeatmap 호출
   useEffect(() => {
     const resizeHandler = () => {
       mapRef.current?.relayout()
-      renderHeatmap()
+      renderHeatmapRef.current()
     }
 
     ensureKakaoLoaded()
@@ -171,29 +217,30 @@ export function DispatchMap({
         window.kakao.maps.load(() => {
           if (!mapLayerRef.current) return
 
-          const center = new window.kakao.maps.LatLng(
-            DEFAULT_CENTER.lat,
-            DEFAULT_CENTER.lng
-          )
-
           mapRef.current = new window.kakao.maps.Map(mapLayerRef.current, {
-            center,
+            center: new window.kakao.maps.LatLng(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng),
             level: 5,
           })
-          
-          let rafId: number | null = null
 
+          let rafId: number | null = null
           const safeRender = () => {
             if (rafId) cancelAnimationFrame(rafId)
-            rafId = requestAnimationFrame(renderHeatmap)
+            rafId = requestAnimationFrame(() => renderHeatmapRef.current())
           }
 
           window.kakao.maps.event.addListener(mapRef.current, 'center_changed', safeRender)
           window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', safeRender)
 
+          // 지도 중심(파란 점)이 바뀔 때마다 onCursorMove로 좌표 전달
+          window.kakao.maps.event.addListener(mapRef.current, 'center_changed', () => {
+            if (onCursorMove) {
+              const center = mapRef.current.getCenter()
+              onCursorMove(center.getLat(), center.getLng())
+            }
+          })
           window.addEventListener('resize', resizeHandler)
+
           setReady(true)
-          renderHeatmap()
         })
       })
       .catch(() => {
@@ -206,80 +253,294 @@ export function DispatchMap({
     }
   }, [])
 
+  // fixedPosition이 있으면 카카오 좌표 → 픽셀 변환해 React DOM에 렌더링 (canvas 위)
+  const [fixedPixel, setFixedPixel] = useState<{ x: number; y: number } | null>(null)
+
+  const updateFixedPixel = useCallback(() => {
+    if (!ready || !fixedPosition || !mapRef.current || !window.kakao?.maps) return
+    const projection = mapRef.current.getProjection()
+    const latLng = new window.kakao.maps.LatLng(fixedPosition.lat, fixedPosition.lng)
+    const pixel = projection.containerPointFromCoords(latLng)
+    setFixedPixel({ x: pixel.x, y: pixel.y })
+  }, [ready, fixedPosition])
+
   useEffect(() => {
-  if (!ready || !mapRef.current || mode !== 'delivery') return
+    if (!ready || !fixedPosition || !mapRef.current || !window.kakao?.maps) {
+      setFixedPixel(null)
+      return
+    }
+    updateFixedPixel()
+    window.kakao.maps.event.addListener(mapRef.current, 'center_changed', updateFixedPixel)
+    window.kakao.maps.event.addListener(mapRef.current, 'zoom_changed', updateFixedPixel)
+    return () => {
+      if (mapRef.current && window.kakao?.maps) {
+        window.kakao.maps.event.removeListener(mapRef.current, 'center_changed', updateFixedPixel)
+        window.kakao.maps.event.removeListener(mapRef.current, 'zoom_changed', updateFixedPixel)
+      }
+    }
+  }, [ready, fixedPosition, updateFixedPixel])
 
-  markersRef.current.forEach((m) => m.setMap(null))
-  markersRef.current = []
+  // mode가 delivery로 바뀌면 캔버스 즉시 클리어
+  useEffect(() => {
+    if (mode !== 'delivery') return
+    const canvas = canvasRef.current
+    if (canvas) {
+      const ctx = canvas.getContext('2d')
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+  }, [mode])
 
-  if (polylineRef.current) {
-    polylineRef.current.setMap(null)
-    polylineRef.current = null
-  }
+  // centerTo가 바뀌면 지도 중심 이동 (delivery 모드일 때만 줌인)
+  useEffect(() => {
+    if (!ready || !mapRef.current || !centerTo || !window.kakao?.maps) return
+    if (mode === 'delivery') mapRef.current.setLevel(3)
+    mapRef.current.panTo(new window.kakao.maps.LatLng(centerTo.lat, centerTo.lng))
+  }, [ready, centerTo, mode])
 
-  markers?.forEach((m) => {
-    const marker = new window.kakao.maps.Marker({
-      position: new window.kakao.maps.LatLng(m.lat, m.lng),
-      map: mapRef.current,
+  const pathMarkersRef = useRef<any[]>([])
+  const pathPolylinesRef = useRef<any[]>([])
+
+  // heatmap 모드에서 여러 경로(paths) 표시
+  useEffect(() => {
+    if (!ready || !mapRef.current || mode !== 'heatmap') return
+
+    // 기존 경로 제거
+    pathMarkersRef.current.forEach((m) => m.setMap(null))
+    pathMarkersRef.current = []
+    pathPolylinesRef.current.forEach((p) => p.setMap(null))
+    pathPolylinesRef.current = []
+
+    if (!paths || paths.length === 0) return
+
+    paths.forEach(({ points: pts, color, pickupPoints, deliveryPoints }) => {
+      if (pts.length < 2) return
+      const linePath = pts.map((p) => new window.kakao.maps.LatLng(p.lat, p.lng))
+      const polyline = new window.kakao.maps.Polyline({
+        path: linePath,
+        strokeWeight: 4,
+        strokeColor: color,
+        strokeOpacity: 0.85,
+        strokeStyle: 'solid',
+        zIndex: 10,
+      })
+      polyline.setMap(mapRef.current)
+      pathPolylinesRef.current.push(polyline)
+
+      // 픽업 마커 이미지 (Group_3.png)
+      const pPoints = pickupPoints ?? [{ lat: pts[0].lat, lng: pts[0].lng }]
+      pPoints.forEach((p) => {
+        const overlay = new window.kakao.maps.CustomOverlay({
+          position: new window.kakao.maps.LatLng(p.lat, p.lng),
+          content: `<div style="width:36px;height:36px;"><img src="/Group_3.png" style="width:36px;height:36px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));" /></div>`,
+          xAnchor: 0.5,
+          yAnchor: 1.0,
+          zIndex: 25,
+          map: mapRef.current,
+        })
+        pathMarkersRef.current.push(overlay)
+      })
+
+      // 배달 마커 이미지 (Group_1.png)
+      const dPoints = deliveryPoints ?? [{ lat: pts[pts.length - 1].lat, lng: pts[pts.length - 1].lng }]
+      dPoints.forEach((p) => {
+        const overlay = new window.kakao.maps.CustomOverlay({
+          position: new window.kakao.maps.LatLng(p.lat, p.lng),
+          content: `<div style="width:36px;height:36px;"><img src="/Group_1.png" style="width:36px;height:36px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));" /></div>`,
+          xAnchor: 0.5,
+          yAnchor: 1.0,
+          zIndex: 25,
+          map: mapRef.current,
+        })
+        pathMarkersRef.current.push(overlay)
+      })
+
+      // 화살표
+      for (let i = 0; i < linePath.length - 1; i++) {
+        const p1 = linePath[i]
+        const p2 = linePath[i + 1]
+        const midLat = (p1.getLat() + p2.getLat()) / 2
+        const midLng = (p1.getLng() + p2.getLng()) / 2
+        const dy = p2.getLat() - p1.getLat()
+        const dx = p2.getLng() - p1.getLng()
+        const angle = Math.atan2(dx, dy) * (180 / Math.PI)
+        const arrow = new window.kakao.maps.CustomOverlay({
+          position: new window.kakao.maps.LatLng(midLat, midLng),
+          content: `<div style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;transform:rotate(${angle}deg);">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">
+              <polygon points="12,3 20,18 12,14 4,18" fill="${color}" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+            </svg>
+          </div>`,
+          zIndex: 15,
+          map: mapRef.current,
+        })
+        pathMarkersRef.current.push(arrow)
+      }
     })
-    markersRef.current.push(marker)
-  })
+  }, [ready, mode, paths])
+  useEffect(() => {
+    if (!ready || !mapRef.current || mode !== 'heatmap' || points.length === 0) return
 
-  if (path && path.length > 0) {
-    const linePath = path.map(
-      (p) => new window.kakao.maps.LatLng(p.lat, p.lng)
-    )
-
-    const polyline = new window.kakao.maps.Polyline({
-      path: linePath,
-      strokeWeight: 5,
-      strokeColor: '#FF0000',
-      strokeOpacity: 1,
-      strokeStyle: 'solid',
-      zIndex: 10
-    })
-
-    polyline.setMap(mapRef.current)
-    polylineRef.current = polyline
-  }
-
-  if (markers && markers.length > 0) {
     const bounds = new window.kakao.maps.LatLngBounds()
-    markers.forEach((m) =>
-      bounds.extend(new window.kakao.maps.LatLng(m.lat, m.lng))
-    )
-    mapRef.current.setBounds(bounds)
-  }
-}, [ready, mode, markers, path])
+    points.forEach((p) => bounds.extend(new window.kakao.maps.LatLng(p.lat, p.lng)))
+    mapRef.current.setBounds(bounds, 80)
 
-  const handleMouseMove = (event: MouseEvent<HTMLDivElement>) => {
-    if (!onCursorMove || !rootRef.current || !isDragging) return
-    const rect = rootRef.current.getBoundingClientRect()
-    const relX = (event.clientX - rect.left) / rect.width
-    const relY = (event.clientY - rect.top) / rect.height
-    const lng = DEFAULT_CENTER.lng + (relX - 0.5) * 0.035
-    const lat = DEFAULT_CENTER.lat - (relY - 0.5) * 0.03
-    onCursorMove(lat, lng)
-  }
+    const currentLevel = mapRef.current.getLevel()
+    if (currentLevel > 5) mapRef.current.setLevel(5)
+    requestAnimationFrame(() => renderHeatmapRef.current())
+
+    const onIdle = () => {
+      renderHeatmapRef.current()
+      window.kakao.maps.event.removeListener(mapRef.current, 'idle', onIdle)
+    }
+    window.kakao.maps.event.addListener(mapRef.current, 'idle', onIdle)
+  }, [ready, points, mode])
+
+  // delivery 모드: markers & path
+  useEffect(() => {
+    if (!ready || !mapRef.current || mode !== 'delivery') return
+
+    markersRef.current.forEach((m) => m.setMap(null))
+    markersRef.current = []
+
+    if (polylineRef.current) {
+      polylineRef.current.setMap(null)
+      polylineRef.current = null
+    }
+
+    const makeMarker = (lat: number, lng: number, iconSrc: string) => {
+      const imageSize = new window.kakao.maps.Size(40, 40)
+      const markerImage = new window.kakao.maps.MarkerImage(iconSrc, imageSize)
+      const marker = new window.kakao.maps.Marker({
+        position: new window.kakao.maps.LatLng(lat, lng),
+        image: markerImage,
+        map: mapRef.current,
+      })
+      return marker
+    }
+
+    // 픽업 마커 — Group_3.png (식당 아이콘)
+    if (pickupMarkers && pickupMarkers.length > 0) {
+      pickupMarkers.forEach((m) => {
+        const marker = makeMarker(m.lat, m.lng, '/Group_3.png')
+        markersRef.current.push(marker)
+      })
+    }
+
+    // 배달 마커 — Group_1.png (집 아이콘)
+    if (deliveryMarkers && deliveryMarkers.length > 0) {
+      deliveryMarkers.forEach((m) => {
+        const marker = makeMarker(m.lat, m.lng, '/Group_1.png')
+        markersRef.current.push(marker)
+      })
+    }
+
+    // 기존 markers prop 폴백 (일반 파란 마커)
+    if (!pickupMarkers && !deliveryMarkers && markers) {
+      markers.forEach((m) => {
+        const marker = new window.kakao.maps.Marker({
+          position: new window.kakao.maps.LatLng(m.lat, m.lng),
+          map: mapRef.current,
+        })
+        markersRef.current.push(marker)
+      })
+    }
+
+    if (path && path.length > 0) {
+      const linePath = path.map((p) => new window.kakao.maps.LatLng(p.lat, p.lng))
+      const polyline = new window.kakao.maps.Polyline({
+        path: linePath,
+        strokeWeight: 5,
+        strokeColor: pathColor,
+        strokeOpacity: 0.9,
+        strokeStyle: 'solid',
+        zIndex: 10,
+      })
+      polyline.setMap(mapRef.current)
+      polylineRef.current = polyline
+
+      // 경로 구간마다 화살표 방향 표시
+      for (let i = 0; i < linePath.length - 1; i++) {
+        const p1 = linePath[i]
+        const p2 = linePath[i + 1]
+
+        // 중간 지점
+        const midLat = (p1.getLat() + p2.getLat()) / 2
+        const midLng = (p1.getLng() + p2.getLng()) / 2
+
+        // 두 점 사이 각도 계산 (북쪽 기준)
+        const dy = p2.getLat() - p1.getLat()
+        const dx = p2.getLng() - p1.getLng()
+        const angle = Math.atan2(dx, dy) * (180 / Math.PI)
+
+        const arrowContent = `
+          <div style="
+            width:24px;height:24px;
+            display:flex;align-items:center;justify-content:center;
+            transform:rotate(${angle}deg);
+            filter:drop-shadow(0 1px 3px rgba(0,0,0,0.3));
+          ">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+              <polygon points="12,3 20,18 12,14 4,18" fill="${pathColor}" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+            </svg>
+          </div>`
+
+        const arrow = new window.kakao.maps.CustomOverlay({
+          position: new window.kakao.maps.LatLng(midLat, midLng),
+          content: arrowContent,
+          zIndex: 15,
+          map: mapRef.current,
+        })
+        markersRef.current.push(arrow)
+      }
+    }
+
+    const allPoints = [
+      ...(pickupMarkers ?? markers ?? []),
+      ...(deliveryMarkers ?? []),
+    ]
+    // centerTo가 있으면 setBounds 생략 (출발점으로 가기 버튼이 zoom을 제어)
+    if (allPoints.length > 0 && !centerTo) {
+      const bounds = new window.kakao.maps.LatLngBounds()
+      allPoints.forEach((m) => bounds.extend(new window.kakao.maps.LatLng(m.lat, m.lng)))
+      mapRef.current.setBounds(bounds, 80)
+      const currentLevel = mapRef.current.getLevel()
+      if (currentLevel > 7) mapRef.current.setLevel(7)
+    }
+  }, [ready, mode, markers, pickupMarkers, deliveryMarkers, path, centerTo, pathColor])
 
   return (
     <div
       ref={rootRef}
       className="relative h-full w-full overflow-hidden"
-      onMouseDown={mode === 'heatmap' ? () => setIsDragging(true) : undefined}
-      onMouseUp={mode === 'heatmap' ? () => setIsDragging(false) : undefined}
-      onMouseLeave={mode === 'heatmap' ? () => setIsDragging(false) : undefined}
-      onMouseMove={mode === 'heatmap' ? handleMouseMove : undefined}
     >
-
       <div ref={mapLayerRef} className="absolute inset-0 z-0" />
-    {mode === 'heatmap' && (
-      <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10" />
-    )}
-      <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
-        <div className="h-4 w-4 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
-        <div className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/20" />
-      </div>
+      {mode === 'heatmap' && (
+        <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10" />
+      )}
+      {/* 파란 점 — heatmap 모드이고 fixedPosition 없을 때만 화면 중앙에 표시 */}
+      {mode === 'heatmap' && !fixedPosition && (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2">
+          <div className="h-4 w-4 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
+          <div className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/20" />
+        </div>
+      )}
+      {/* fixedPosition 파란 점 — React DOM 오버레이 (canvas 위, z-40) */}
+      {fixedPixel && (
+        <div
+          className="pointer-events-none absolute z-40"
+          style={{ left: fixedPixel.x, top: fixedPixel.y, transform: 'translate(-50%, -50%)' }}
+        >
+          <div className="h-10 w-10 rounded-full bg-blue-500/20" />
+          <div className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
+        </div>
+      )}
+      {/* delivery 모드 파란 점 — 화면 중앙 고정 */}
+      {mode === 'delivery' && !fixedPixel && (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2">
+          <div className="h-4 w-4 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
+          <div className="absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/20" />
+        </div>
+      )}
 
       {badgeText && (
         <div className="absolute left-4 top-20 z-20 rounded-full bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow">
