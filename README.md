@@ -18,9 +18,9 @@ npm run build
 npm run dev
 ```
 
-3. input 데이터를 public 폴더에 넣습니다.
+3. 터미널에 출력되는 로컬 주소(예: http://localhost:5173)를 브라우저에서 엽니다.
 
-4. 터미널에 출력되는 로컬 주소(예: http://localhost:5173)를 브라우저에서 엽니다.
+4. input 데이터를 public 폴더에 넣습니다.
 
 ## 데이터 파일 교체
  
