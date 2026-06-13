@@ -9,6 +9,7 @@ React + Tailwind 기반의 배달 라이더 배차 및 내비게이션 UI입니�
 
 ```bash
 npm install
+npm run build
 ```
 
 2. 개발 서버 실행
