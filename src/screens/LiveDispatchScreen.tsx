@@ -90,7 +90,28 @@ export function LiveDispatchScreen({ onStartDelivery }: Props) {
     if (points.length === 0) return
     const sorted = [...points].sort((a, b) => b.count - a.count)
     const topPoints = sorted.slice(0, Math.ceil(sorted.length * 0.3))
-    const target = topPoints[Math.floor(Math.random() * topPoints.length)]
+
+    const current = mapCenterRef.current
+    let target
+
+    if (current) {
+      // 현재 위치 기준 가까운 top 포인트 중 하나로 이동 (너무 멀리 가지 않게)
+      const nearby = topPoints
+        .map((p) => ({
+          ...p,
+          dist: Math.hypot(p.lat - current.lat, p.lng - current.lng),
+        }))
+        .filter((p) => p.dist > 0.003) // 너무 가까운 건 제외
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 10) // 가까운 10개 중 랜덤
+
+      target = nearby.length > 0
+        ? nearby[Math.floor(Math.random() * nearby.length)]
+        : topPoints[Math.floor(Math.random() * topPoints.length)]
+    } else {
+      target = topPoints[Math.floor(Math.random() * topPoints.length)]
+    }
+
     setCenterTo({ lat: target.lat, lng: target.lng })
     mapCenterRef.current = { lat: target.lat, lng: target.lng }
     setFixedPosition({ lat: target.lat, lng: target.lng })
@@ -112,12 +133,47 @@ export function LiveDispatchScreen({ onStartDelivery }: Props) {
     setScreenState('optimizing')
 
     try {
-      // 백엔드 최적화 API 호출
-      const res = await fetch('/STAGE3_TEST_9.json')
-      const data = await res.json()
+      const NGROK_HEADERS = {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      }
 
-      const apiRes = await fetch('http://localhost:8000/api/run-dms')
-      const apiData = await apiRes.json()
+      // 1. 최적화 작업 시작
+      const startRes = await fetch('https://grout-suffice-matriarch.ngrok-free.dev/api/run-dms', {
+        method: 'POST',
+        headers: NGROK_HEADERS,
+        body: JSON.stringify({
+          data_file: 'STAGE3_TEST_9.json',
+          time_limit: 120,
+        }),
+      })
+      const startData = await startRes.json()
+      const jobId = startData.job_id
+      if (!jobId) throw new Error('job_id 없음')
+
+      // 2. 완료될 때까지 job-status 폴링 (2초 간격, 최대 150초)
+      let bundles: any[] = []
+      for (let i = 0; i < 75; i++) {
+        await new Promise((r) => setTimeout(r, 2000))
+        const statusRes = await fetch(
+          `https://grout-suffice-matriarch.ngrok-free.dev/api/job-status?job_id=${jobId}`,
+          { headers: NGROK_HEADERS }
+        )
+        const statusData = await statusRes.json()
+        if (statusData.status === 'success') {
+          // 3. 완료되면 job-bundles로 bundle 배열 가져오기
+          const bundlesRes = await fetch(
+            `https://grout-suffice-matriarch.ngrok-free.dev/api/job-bundles?job_id=${jobId}`,
+            { headers: NGROK_HEADERS }
+          )
+          const bundlesData = await bundlesRes.json()
+          bundles = bundlesData.bundles ?? []
+          break
+        }
+        if (statusData.status === 'error') {
+          throw new Error('최적화 실패')
+        }
+      }
 
       const unassigned = rawOrders.filter((o) => !assignedIds.current.has(o.id))
       const sorted = unassigned
@@ -130,23 +186,31 @@ export function LiveDispatchScreen({ onStartDelivery }: Props) {
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 3)
         .map((o, i) => {
-          const bundle = apiData.bundles?.find((b: any) =>
-            b.shop_seq.includes(o.id) || b.dlv_seq.includes(o.id)
+          // order_id로 해당 bundle 찾기
+          const bundle = bundles.find((b: any) =>
+            b.order_ids?.includes(o.id)
           )
           const pickupPoints = bundle
-            ? bundle.shops.map((s: any) => ({ lat: s.lat, lng: s.lon }))
+            ? bundle.visits
+                .filter((v: any) => v.type === 'pickup')
+                .map((v: any) => ({ lat: v.lat + 1.5, lng: v.lng + 1.5 }))
             : [{ lat: o.shop_lat, lng: o.shop_lon }]
           const deliveryPoints = bundle
-            ? bundle.dlvs.map((d: any) => ({ lat: d.lat, lng: d.lon }))
+            ? bundle.visits
+                .filter((v: any) => v.type === 'delivery')
+                .map((v: any) => ({ lat: v.lat + 1.5, lng: v.lng + 1.5 }))
             : [{ lat: o.dlv_lat, lng: o.dlv_lon }]
-          const path = [...pickupPoints, ...deliveryPoints]
+          // visits 순서대로 경로 구성
+          const path = bundle
+            ? bundle.visits.map((v: any) => ({ lat: v.lat + 1.5, lng: v.lng + 1.5 }))
+            : [...pickupPoints, ...deliveryPoints]
           return {
             ...o,
             color: ORDER_COLORS[i],
             path,
             pickupPoints,
             deliveryPoints,
-            bundleCount: bundle ? bundle.shops.length : 1,
+            bundleCount: bundle ? bundle.order_ids.length : 1,
           }
         })
 
