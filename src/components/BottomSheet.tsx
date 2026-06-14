@@ -124,7 +124,7 @@ export function BottomSheet({
                     ))}
                   </div>
                   <span className="text-sm font-bold text-slate-800">
-                    주변 주문 {nearbyOrders.length}건
+                    주변 주문 경로 확인하기
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
