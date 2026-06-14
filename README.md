@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-3. 터미널에 출력되는 로컬 주소(예: http://localhost:5173)를 브라우저에서 엽니다.
+3. 터미널에 출력되는 로컬 주소(예: http://localhost:5175)를 브라우저에서 엽니다.
 
 ## 데이터 파일 설정
 
