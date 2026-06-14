@@ -37,22 +37,6 @@ const res = await fetch('/STAGE3_TEST_9.json')  // 변경
 const res = await fetch("/STAGE3_TEST_9.json", {  // 변경
 ```
 
-## 경로 최적화 API
-
-주문 탐색 기능은 외부 최적화 API 서버와 연동됩니다.
-
-- API 서버 주소가 변경될 경우 `src/screens/LiveDispatchScreen.tsx`의 fetch URL을 수정하세요.
-- API 서버가 꺼져 있거나 연결에 실패하면 단순 경로(폴백)로 표시됩니다.
-
-데이터 파일명을 변경할 경우 아래 부분도 함께 수정합니다.
-
-```ts
-body: JSON.stringify({
-  data_file: 'STAGE3_TEST_9.json',  // 변경
-  time_limit: 120,
-})
-```
-
 ## 사용 흐름
 
 1. **히트맵 화면** — 주문 밀집 지역을 히트맵으로 확인
