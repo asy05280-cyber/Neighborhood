@@ -9,7 +9,6 @@ React + Tailwind 기반의 배달 라이더 배차 및 내비게이션 UI입니�
 
 ```bash
 npm install
-npm run build
 ```
 
 2. 개발 서버 실행
@@ -18,22 +17,22 @@ npm run build
 npm run dev
 ```
 
-3. 터미널에 출력되는 로컬 주소(예: http://localhost:5173)를 브라우저에서 엽니다.
+3. 터미널에 출력되는 로컬 주소(예: http://localhost:5175)를 브라우저에서 엽니다.
 
-4. input 데이터를 public 폴더에 넣습니다.
+## 데이터 파일 설정
 
-## 데이터 파일 교체
- 
-사용할 데이터 파일(`*.json`)을 교체할 경우 아래 두 파일에서 파일명을 수정합니다.
- 
-**`src/screens/LiveDispatchScreen.tsx`** — 69번, 113번 줄 (2곳)
- 
+input 데이터 파일(`*.json`)을 `public/` 폴더에 넣습니다.
+
+파일명을 변경할 경우 아래 두 파일에서 수정합니다.
+
+**`src/screens/LiveDispatchScreen.tsx`** — 2곳
+
 ```ts
 const res = await fetch('/STAGE3_TEST_9.json')  // 변경
 ```
- 
-**`src/services/orderHeatmap.ts`** — 27번 줄 (1곳)
- 
+
+**`src/services/orderHeatmap.ts`** — 1곳
+
 ```ts
 const res = await fetch("/STAGE3_TEST_9.json", {  // 변경
 ```
@@ -42,7 +41,7 @@ const res = await fetch("/STAGE3_TEST_9.json", {  // 변경
 
 1. **히트맵 화면** — 주문 밀집 지역을 히트맵으로 확인
 2. **위치 설정** — GPS 버튼으로 현재 위치 고정 (선택 사항)
-3. **주문 탐색** — "주변 주문 탐색하기" 버튼 클릭 → 경로 최적화 진행
+3. **주문 탐색** — "주변 주문 탐색하기" 버튼 클릭 → 경로 최적화 진행 (약 2분 소요)
 4. **주문 선택** — 최적화된 주문 목록에서 경로 미리보기 후 원하는 주문 선택
 5. **배정 확인** — 선택한 주문의 픽업/배달 경로 확인 후 픽업 시작
 6. **내비게이션** — 픽업 → 배달 순서로 단계별 경로 안내, 배달 완료 시 초기 화면으로 복귀
